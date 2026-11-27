@@ -38,19 +38,24 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("cfg", MODE_PRIVATE)
 
         val info = TextView(this).apply {
-            text = "1. Tempel API key Anthropic lalu Simpan.\n" +
+            text = "1. Tempel API key (Gemini gratis dari aistudio.google.com, atau Anthropic) lalu Simpan.\n" +
                 "2. Buka Aksesibilitas, aktifkan 'Form AI Mengambang'.\n" +
                 "3. Buka Google Form di Chrome, tekan tombol AI yang mengambang."
             setPadding(0, 0, 0, 32)
         }
         val keyInput = EditText(this).apply {
-            hint = "sk-ant-..."
+            hint = "API key (AIza... atau sk-ant-...)"
             setText(prefs.getString("key", ""))
+        }
+        val modelInput = EditText(this).apply {
+            hint = "Model Gemini (default gemini-2.5-flash)"
+            setText(prefs.getString("model", "gemini-2.5-flash"))
         }
         val save = Button(this).apply {
             text = "Simpan"
             setOnClickListener {
-                prefs.edit().putString("key", keyInput.text.toString().trim()).apply()
+                prefs.edit().putString("key", keyInput.text.toString().trim())
+                    .putString("model", modelInput.text.toString().trim()).apply()
                 Toast.makeText(this@MainActivity, "Tersimpan", Toast.LENGTH_SHORT).show()
             }
         }
@@ -62,7 +67,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 48, 48, 48)
-            addView(info); addView(keyInput); addView(save); addView(acc)
+            addView(info); addView(keyInput); addView(modelInput); addView(save); addView(acc)
         })
     }
 }
@@ -328,7 +333,31 @@ class FloatingService : AccessibilityService() {
         }, 2000)
     }
 
-    private fun chat(key: String, prompt: String): String {
+    /** Kunci diawali sk-ant -> Claude (berbayar). Selain itu -> Gemini (ada tier gratis). */
+    private fun chat(key: String, prompt: String): String =
+        if (key.startsWith("sk-ant")) chatClaude(key, prompt) else chatGemini(key, prompt)
+
+    private fun chatGemini(key: String, prompt: String): String {
+        val model = getSharedPreferences("cfg", MODE_PRIVATE).getString("model", "")
+            ?.trim().takeUnless { it.isNullOrEmpty() } ?: "gemini-2.5-flash"
+        val body = JSONObject().put(
+            "contents",
+            JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt))))
+        ).toString()
+        val req = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+            .header("x-goog-api-key", key)
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+        http.newCall(req).execute().use { res ->
+            val json = JSONObject(res.body!!.string())
+            if (json.has("error")) return "Error: " + json.getJSONObject("error").optString("message")
+            return json.getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+        }
+    }
+
+    private fun chatClaude(key: String, prompt: String): String {
         val body = JSONObject()
             .put("model", "claude-sonnet-4-6")
             .put("max_tokens", 1500)
